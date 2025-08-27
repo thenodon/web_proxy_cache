@@ -50,7 +50,7 @@ The caching logic is based on the following principles:
 - The cache will use a LRU (Least Recently Used) strategy to evict old entries when the cache size exceeds `CACHE_SIZE`.
 
 
-# Service discovery (since v0.2.0)
+# Service discovery
 The web_proxy_cache can be used with http based service discovery in Prometheus. The service discovery can in principle 
 be used for any api call for the netbox api, but the exporter is designed to work with the 
 `/dcim/devices/` endpoint where the filter return a hugh amount of entries.
