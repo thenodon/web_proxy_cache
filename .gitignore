@@ -1,0 +1,31 @@
+/web_proxy_cache
+*.bin
+
+# Vendor directory (if not using Go modules)
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories (Go modules)
+/go.sum
+/go.mod
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Test cache
+*.coverprofile
+*.log
+
+# Build and release directories
+dist/
+release/
+datasource/

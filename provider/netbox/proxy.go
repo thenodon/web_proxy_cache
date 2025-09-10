@@ -1,19 +1,22 @@
-package main
+package netbox
 
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"strings"
+	"web_proxy_cache/config"
+	"web_proxy_cache/provider/common"
+	"web_proxy_cache/proxy_cache"
 
 	"github.com/sirupsen/logrus"
 )
 
 const (
+	Netbox = "netbox"
 	// Devices
 	DeviceType      = "device_type"
 	DeviceTypeSlug  = "device_type_slug"
@@ -38,7 +41,32 @@ const (
 	TenantSlug      = "tenant_slug"
 )
 
-func NetboxEndpoint(w http.ResponseWriter, r *http.Request) {
+var Config = config.ConfigProxy{
+	ProxyLimit: config.GetEnvAsInt("NETBOX_LIMIT", 1000),
+	CacheUse:   config.GetEnvAsBool("NETBOX_CACHE_USE", true),
+	CacheTTL:   config.GetEnvAsInt64("NETBOX_CACHE_TTL", 600),
+	CacheGrace: config.GetEnvAsInt64("NETBOX_CACHE_GRACE", 300),
+	CacheSize:  config.GetEnvAsInt("NETBOX_CACHE_SIZE", 1000),
+}
+var customTransport = http.DefaultTransport
+
+var cache map[string]*proxy_cache.Cache
+
+func init() {
+	cache = make(map[string]*proxy_cache.Cache)
+	cache[Netbox] = proxy_cache.NewCache(Config, Netbox, getForwardContent)
+	// Here, you can customize the transport, e.g., set timeouts or enable/disable keep-alive
+}
+
+type proxyResponse struct {
+	Count    int           `json:"count"`
+	Next     string        `json:"next"`
+	Previous string        `json:"previous"`
+	Results  []interface{} `json:"results"`
+	//RequestHeaders  http.Header   `json:"RequestHeaders"`
+}
+
+func Endpoint(w http.ResponseWriter, r *http.Request) {
 
 	// Guard clause to check if the request method is GET
 	if r.Method != http.MethodGet {
@@ -53,10 +81,10 @@ func NetboxEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	netboxCache(w, r)
+	cacheHandling(w, r)
 }
 
-func netboxCache(w http.ResponseWriter, r *http.Request) {
+func cacheHandling(w http.ResponseWriter, r *http.Request) {
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s", Netbox))
 
 	key := fmt.Sprintf("%s%s?%s", r.Header.Get("X-Forwarded-Host"), r.URL.Path, r.URL.RawQuery)
@@ -73,13 +101,13 @@ func netboxCache(w http.ResponseWriter, r *http.Request) {
 		}
 		cacheData, ok = cache[Netbox].Get(key)
 		if !ok {
-			http.Error(w, "Not found in cache", http.StatusNotFound)
+			http.Error(w, "Not found in proxy_cache", http.StatusNotFound)
 			return
 		}
 	}
 
-	// create the response headers from the cache data
-	for name, values := range cacheData.(CacheData).ResponseHeaders {
+	// create the response headers from the proxy_cache data
+	for name, values := range cacheData.(proxy_cache.CacheData).ResponseHeaders {
 
 		for _, value := range values {
 			if name != "Content-Length" && name != "Allow" {
@@ -106,7 +134,7 @@ func netboxCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Encode the response body to JSON and write it to the original response
-	err := json.NewEncoder(w).Encode(cacheData.(CacheData).Data)
+	err := json.NewEncoder(w).Encode(cacheData.(proxy_cache.CacheData).Data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -114,7 +142,7 @@ func netboxCache(w http.ResponseWriter, r *http.Request) {
 }
 
 func doServiceDiscovery(w http.ResponseWriter, cacheData interface{}) {
-	sd, err := serviceDiscovery(cacheData.(CacheData).Data)
+	sd, err := serviceDiscovery(cacheData.(proxy_cache.CacheData).Data)
 	if err != nil {
 		logrus.WithFields(logrus.Fields{"operation": "service-discovery", "error": err}).Error("Service discovery failed")
 		http.Error(w, "Service discovery failed", http.StatusInternalServerError)
@@ -131,15 +159,17 @@ func doServiceDiscovery(w http.ResponseWriter, cacheData interface{}) {
 func serviceDiscovery(cacheData interface{}) ([]map[string]interface{}, error) {
 	logrus.WithFields(logrus.Fields{"operation": "service-discovery"}).Info("Service discovery called")
 
-	raw, ok := cacheData.(NetboxResponse)
+	raw, ok := cacheData.(proxyResponse)
 	if !ok {
 		return nil, fmt.Errorf("data is not a map[string]interface{}")
 	}
 
 	results := raw.Results
-	if !ok {
-		return nil, fmt.Errorf("missing or malformed 'results' field in JSON data")
-	}
+	/*
+		if !ok {
+			return nil, fmt.Errorf("missing or malformed 'results' field in JSON data")
+		}
+	*/
 
 	var sd []map[string]interface{}
 	for _, entry := range results {
@@ -241,20 +271,19 @@ func flattenCustomFields(customFields map[string]interface{}) map[string]string 
 func getForwardContent(r *http.Request) {
 	_, _, err := getForwardContentData(r)
 	if err != nil {
-		logrus.WithFields(logrus.Fields{"operation": "proxy"}).
-			Error("pre fetch cache")
+		logrus.WithFields(logrus.Fields{"operation": "proxy", "proxy": Netbox}).
+			Error("pre fetch proxy_cache")
 		cache[Netbox].Delete(fmt.Sprintf("%s%s?%s", r.Header.Get("X-Forwarded-Host"), r.URL.Path, r.URL.RawQuery))
 	}
-
 }
 
 func getForwardContentData(r *http.Request) (string, int, error) {
 	// Create a new HTTP request with the same method, URL, and body as the original request
-	var result NetboxResponse
+	var result proxyResponse
 	targetURL := r.URL
 	// Get the X-Forwarded-Host header from the original request and use it to construct the new URL to the target
 	forwardHost := r.Header.Get("X-Forwarded-Host")
-	limit := config.ProxyLimit
+	limit := Config.ProxyLimit
 	offset := 0
 	var newUrl string
 	if strings.Contains(targetURL.String(), "?") {
@@ -264,7 +293,6 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 	}
 	proxyReq, err := http.NewRequest(r.Method, newUrl, r.Body)
 	if err != nil {
-		//http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
 		logrus.WithFields(logrus.Fields{"operation": "proxy", "url": newUrl, "err": err, "offset": 0}).
 			Error("creating proxy request")
 		return "Error creating proxy request", http.StatusInternalServerError, err
@@ -283,7 +311,6 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 	startTime := time.Now()
 	resp, err := customTransport.RoundTrip(proxyReq)
 	if err != nil {
-		//http.Error(w, fmt.Sprintf("Error sending proxy request"), http.StatusInternalServerError)
 		logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "err": err, "offset": 0}).
 			Error("sending proxy request")
 		return "Error sending proxy request", http.StatusInternalServerError, err
@@ -301,19 +328,17 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 	// Typical status codes are 400 for bad request, 401 for unauthorized, 403 for forbidden, 404 for not found, etc.
 	// 400 typically means that the request had bad filters or parameters.
 	if resp.StatusCode != http.StatusOK {
-		// http.Error(w, "Error sending proxy request", resp.StatusCode)
 		logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "offset": 0, "status": resp.StatusCode}).
 			Error("response status")
 		return "Error sending proxy request", resp.StatusCode, nil
 	}
 
-	body, err := io.ReadAll(resp.Body) // response body is []byte
+	body, err := common.ReadResponseBody(resp)
+	//body, err := io.ReadAll(resp.Body) // response body is []byte
+	//_ = resp.Body.Close()
 
-	_ = resp.Body.Close()
-
-	var resultTemp NetboxResponse
-	if err := json.Unmarshal(body, &resultTemp); err != nil { // Parse []byte to go struct pointer
-		// http.Error(w, "Could not unmarshal", http.StatusInternalServerError)
+	var resultTemp proxyResponse
+	if err := json.Unmarshal(body, &resultTemp); err != nil {
 		logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "offset": 0, "err": err}).
 			Error("unmarshall body")
 		return "Could not unmarshal", http.StatusInternalServerError, err
@@ -328,7 +353,6 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 
 		proxyReq, err = http.NewRequest(r.Method, resultTemp.Next, r.Body)
 		if err != nil {
-			//http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
 			logrus.WithFields(logrus.Fields{"operation": "proxy", "err": err, "offset": countCollect}).
 				Error("creating proxy request")
 			return "Error creating proxy request", http.StatusInternalServerError, err
@@ -347,7 +371,6 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 		startTime = time.Now()
 		resp, err = customTransport.RoundTrip(proxyReq)
 		if err != nil {
-			//http.Error(w, "Error sending proxy request", http.StatusInternalServerError)
 			logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "err": err, "offset": countCollect}).
 				Error("sending proxy request")
 			return "Error sending proxy request", http.StatusInternalServerError, err
@@ -360,10 +383,10 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 			"size":      resp.ContentLength,
 		}).Info("sending proxy request")
 
-		body, err = io.ReadAll(resp.Body) // response body is []byte
-		_ = resp.Body.Close()
-		if err := json.Unmarshal(body, &resultTemp); err != nil { // Parse []byte to go struct pointer
-			//http.Error(w, "Could not unmarshal", http.StatusInternalServerError)
+		body, err = common.ReadResponseBody(resp)
+		//body, err = io.ReadAll(resp.Body) // response body is []byte
+		//_ = resp.Body.Close()
+		if err := json.Unmarshal(body, &resultTemp); err != nil {
 			logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "offset": countCollect, "err": err}).
 				Error("unmarshall body")
 			return "Could not unmarshal", http.StatusInternalServerError, err
@@ -376,13 +399,13 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 	// Encode the response body to JSON and write it to the original response
 	//err = json.NewEncoder(w).Encode(result)
 	if err != nil {
-		//http.Error(w, err.Error(), http.StatusInternalServerError)
 		logrus.WithFields(logrus.Fields{"operation": "proxy", "url": proxyReq.URL, "err": err}).
 			Error("encode response")
 		return err.Error(), http.StatusInternalServerError, err
 	}
 
-	cacheData := CacheData{
+	resp.Header.Set("Content-Encoding", "identity")
+	cacheData := proxy_cache.CacheData{
 		RequestHeaders:  r.Header,
 		ResponseHeaders: resp.Header,
 		Data:            result,

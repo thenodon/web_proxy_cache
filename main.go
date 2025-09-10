@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	config2 "web_proxy_cache/config"
+	"web_proxy_cache/provider"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -19,35 +21,7 @@ import (
 
 var version = "undefined"
 
-const (
-	Netbox = "netbox"
-
-	// MetricsPrefix the prefix for all internal metrics
-	MetricsPrefix = "network_proxy_"
-)
-
-var customTransport = http.DefaultTransport
-
-var config = ConfigProxy{
-	ProxyLimit:    GetEnvAsInt("LIMIT", 1000),
-	CacheUse:      GetEnvAsBool("CACHE_USE", true),
-	CacheTTL:      GetEnvAsInt64("CACHE_TTL", 600),
-	CacheGrace:    GetEnvAsInt64("CACHE_GRACE", 300),
-	CacheSize:     GetEnvAsInt("CACHE_SIZE", 1000),
-	ServerAddress: GetEnv("SERVER_ADDRESS", ":8080"),
-}
-
-var cache map[string]*Cache
-
-func init() {
-	cache = make(map[string]*Cache)
-	cache[Netbox] = NewCache(config, Netbox, getForwardContent)
-	// Here, you can customize the transport, e.g., set timeouts or enable/disable keep-alive
-}
-
-type HandlerInit struct {
-	config ConfigProxy
-}
+var ServerAddress = config2.GetEnv("SERVER_ADDRESS", ":8080")
 
 func main() {
 
@@ -60,17 +34,18 @@ func main() {
 
 	// Create a Prometheus histogram for response time of the exporter
 	responseTime := promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    MetricsPrefix + "request_duration_seconds",
+		Name:    config2.MetricsPrefix + "request_duration_seconds",
 		Help:    "Histogram of the time (in seconds) each request took to complete.",
 		Buckets: []float64{0.050, 0.100, 0.200, 0.500, 0.800, 1.00, 2.000, 3.000},
 	},
 		[]string{"proxy", "status"},
 	)
 
-	// Create a new HTTP server with the netbox function as the handler
-	// Setup handler for aci destinations
-	path := fmt.Sprintf("/%s/", Netbox)
-	http.Handle(path, logCall(promMonitor(http.HandlerFunc(NetboxEndpoint), responseTime, path)))
+	// Register each provider endpoint
+	for path, handler := range provider.Providers {
+		log.WithFields(log.Fields{"path": path}).Info("Registering provider")
+		http.Handle(path, logCall(promMonitor(handler, responseTime, path)))
+	}
 
 	// Setup handler for exporter metrics
 	http.Handle("/metrics", promhttp.HandlerFor(
@@ -82,15 +57,15 @@ func main() {
 	))
 
 	server := &http.Server{
-		//ReadTimeout:  viper.GetDuration("httpserver.read_timeout") * time.Second,
+		//ReadTimeout: viper.GetDuration("httpserver.read_timeout") * time.Second,
 		//WriteTimeout: viper.GetDuration("httpserver.write_timeout") * time.Second,
-		Addr: config.ServerAddress,
+		Addr: ServerAddress,
 	}
 
 	// Start the server and log any errors
 	//log.WithFields(log.Fields{"address": config.ServerAddress, "version": version}).Info("Starting proxy server")
-	log.WithFields(log.Fields{"address": config.ServerAddress, "version": version, "cache_size": config.CacheSize,
-		"cache_ttl": config.CacheTTL, "cache_grace": config.CacheGrace}).Info("Starting proxy server")
+	log.WithFields(log.Fields{"address": ServerAddress, "version": version}).Info("Starting proxy server")
+	//, "cache_size": config.CacheSize, "cache_ttl": config.CacheTTL, "cache_grace": config.CacheGrace}).Info("Starting proxy server")
 	err := server.ListenAndServe()
 	if err != nil {
 		log.Fatal("Error starting proxy server: ", err)
@@ -138,12 +113,4 @@ func promMonitor(next http.Handler, ops *prometheus.HistogramVec, endpoint strin
 		response := time.Since(start).Seconds()
 		ops.With(prometheus.Labels{"proxy": strings.ReplaceAll(endpoint, "/", ""), "status": strconv.Itoa(lrw.statusCode)}).Observe(response)
 	})
-}
-
-type NetboxResponse struct {
-	Count    int           `json:"count"`
-	Next     string        `json:"next"`
-	Previous string        `json:"previous"`
-	Results  []interface{} `json:"results"`
-	//RequestHeaders  http.Header   `json:"RequestHeaders"`
 }

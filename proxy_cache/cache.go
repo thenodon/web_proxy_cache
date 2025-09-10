@@ -1,9 +1,11 @@
-package main
+package proxy_cache
 
 import (
 	"net/http"
 	"net/url"
 	"sort"
+
+	"web_proxy_cache/config"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -16,28 +18,28 @@ import (
 
 var cacheHits = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: MetricsPrefix + "cache_hits_total",
+		Name: config.MetricsPrefix + "cache_hits_total",
 		Help: "Cache hits",
 	},
 	[]string{"proxy"},
 )
 var cacheMiss = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: MetricsPrefix + "cache_miss_total",
+		Name: config.MetricsPrefix + "cache_miss_total",
 		Help: "Cache misses",
 	},
 	[]string{"proxy"},
 )
 var cacheGraceFetches = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: MetricsPrefix + "cache_grace_fetches_total",
+		Name: config.MetricsPrefix + "cache_grace_fetches_total",
 		Help: "Cache grace fetches",
 	},
 	[]string{"proxy"},
 )
 var cacheExpire = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: MetricsPrefix + "cache_expire_total",
+		Name: config.MetricsPrefix + "cache_expire_total",
 		Help: "Cache expire",
 	},
 	[]string{"proxy"},
@@ -129,7 +131,7 @@ type Cache struct {
 }
 
 // func NewCache(config ConfigProxy, name string, fetchfunc func(w http.ResponseWriter, r *http.Request)) *Cache {
-func NewCache(config ConfigProxy, name string, fetchfunc func(r *http.Request)) *Cache {
+func NewCache(config config.ConfigProxy, name string, fetchfunc func(r *http.Request)) *Cache {
 	return &Cache{
 		entries:   make(map[string]*cacheObj),
 		index:     SortedSet{},
@@ -149,8 +151,8 @@ func (u *Cache) Set(key string, data CacheData) {
 		oldest := u.index.Elements()[0]
 		delete(u.entries, oldest.Value)
 		u.index.Remove(oldest)
-		log.WithFields(log.Fields{"operation": "cache", "key": oldest}).
-			Info("cache size limit reached")
+		log.WithFields(log.Fields{"operation": "proxy_cache", "key": oldest}).
+			Info("proxy_cache size limit reached")
 	}
 
 	obj := cacheObj{
@@ -196,8 +198,8 @@ func (u *Cache) Delete(key string) {
 	if _, exists := u.entries[key]; exists {
 		delete(u.entries, key)
 		u.index.Remove(Element{Value: key})
-		log.WithFields(log.Fields{"operation": "cache", "key": key}).
-			Info("cache entry removed")
+		log.WithFields(log.Fields{"operation": "proxy_cache", "key": key}).
+			Info("proxy_cache entry removed")
 	}
 }
 
@@ -221,17 +223,17 @@ func (u *Cache) Get(key string) (interface{}, bool) {
 				//w := NewCustomResponseWriter()
 				go u.fetchFunc(r)
 				cacheGraceFetches.WithLabelValues(u.name).Inc()
-				log.WithFields(log.Fields{"operation": "cache", "key": key, "used": u.entries[key].usedCounter}).
+				log.WithFields(log.Fields{"operation": "proxy_cache", "key": key, "used": u.entries[key].usedCounter}).
 					Info("TTL expired, grace time")
 			} else {
 				u.mu.Lock()
 				delete(u.entries, key)
 				u.index.Remove(Element{Value: key})
 				u.mu.Unlock()
-				log.WithFields(log.Fields{"operation": "cache", "key": key}).
+				log.WithFields(log.Fields{"operation": "proxy_cache", "key": key}).
 					Info("TTL expired")
 				cacheExpire.WithLabelValues(u.name).Inc()
-				log.WithFields(log.Fields{"operation": "cache", "key": key}).
+				log.WithFields(log.Fields{"operation": "proxy_cache", "key": key}).
 					Info("TTL expired, entry removed")
 				return nil, false
 			}
@@ -243,12 +245,12 @@ func (u *Cache) Get(key string) (interface{}, bool) {
 		u.mu.Unlock()
 		u.Inc(key)
 		cacheHits.WithLabelValues(u.name).Inc()
-		log.WithFields(log.Fields{"operation": "cache", "key": key, "used": u.entries[key].usedCounter}).
+		log.WithFields(log.Fields{"operation": "proxy_cache", "key": key, "used": u.entries[key].usedCounter}).
 			Info("Cache hit")
 		return value.cacheData, true
 	}
 	cacheMiss.WithLabelValues(u.name).Inc()
-	log.WithFields(log.Fields{"operation": "cache", "key": key}).
+	log.WithFields(log.Fields{"operation": "proxy_cache", "key": key}).
 		Info("Cache miss")
 	u.mu.RUnlock()
 	return nil, false
