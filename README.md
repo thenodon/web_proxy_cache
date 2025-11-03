@@ -70,8 +70,7 @@ and the parser will be used to parse the data into a format that can be used by 
 The web_proxy_cache can be used with http based service discovery in Prometheus. The service discovery can in principle 
 be used for any api call for the netbox api, but the exporter is designed to work with the 
 `/dcim/devices/` endpoint where the filter return a hugh amount of entries.
-To format the output for service discovery use the `X-Forwarded-For` header with the value
-`service_discovery`.
+To format the output for service discovery use the `X-Forwarded-For` header with the value `service-discovery`.
 > The reason for this implementation is that it has been observed that the netbox plugin 
 > [netbox-plugin-prometheus-sd](https://github.com/FlxPeters/netbox-plugin-prometheus-sd) 
 > will take a vary long time to return the result or even return 500 or 504 (probobly proxy timeout) 

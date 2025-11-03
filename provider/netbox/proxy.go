@@ -87,8 +87,7 @@ func Endpoint(w http.ResponseWriter, r *http.Request) {
 func cacheHandling(w http.ResponseWriter, r *http.Request) {
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s", Netbox))
 
-	key := fmt.Sprintf("%s%s?%s", r.Header.Get("X-Forwarded-Host"), r.URL.Path, r.URL.RawQuery)
-
+	key := getCacheKey(r)
 	var cacheData interface{}
 	var ok bool
 	cacheData, ok = cache[Netbox].Get(key)
@@ -165,11 +164,6 @@ func serviceDiscovery(cacheData interface{}) ([]map[string]interface{}, error) {
 	}
 
 	results := raw.Results
-	/*
-		if !ok {
-			return nil, fmt.Errorf("missing or malformed 'results' field in JSON data")
-		}
-	*/
 
 	var sd []map[string]interface{}
 	for _, entry := range results {
@@ -411,6 +405,11 @@ func getForwardContentData(r *http.Request) (string, int, error) {
 		Data:            result,
 	}
 
-	cache[Netbox].Set(fmt.Sprintf("%s%s?%s", r.Header.Get("X-Forwarded-Host"), r.URL.Path, r.URL.RawQuery), cacheData)
+	cache[Netbox].Set(getCacheKey(r), cacheData)
 	return "Success", http.StatusOK, nil
+}
+
+// getCacheKey generates a unique cache key based on the request URL and relevant headers
+func getCacheKey(r *http.Request) string {
+	return fmt.Sprintf("%s%s?%s-%s", r.Header.Get("X-Forwarded-Host"), r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"))
 }
