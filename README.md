@@ -46,6 +46,7 @@ Provider specific environment variables:
 - `<PROVIDER>_CACHE_TTL` - the time to keep data in the cache, default `600` seconds
 - `<PROVIDER>_CACHE_GRACE` - the time to after TTL where the cache will return cached data but fetch new in the background, default `300` seconds
 - `<PROVIDER>_CACHE_SIZE` - max cache size, default `1000`
+- `<PROVIDER>_HTTPS_SECURE` - enable TLS certificate verification for provider fetches, default `true` (set to `false` to allow insecure HTTPS)
 
 > For any other providers the configuration is the same just replace `NETBOX` with the provider name.
 
@@ -69,12 +70,12 @@ and the parser will be used to parse the data into a format that can be used by 
 ## Service discovery 
 The web_proxy_cache can be used with http based service discovery in Prometheus. The service discovery can in principle 
 be used for any api call for the netbox api, but the exporter is designed to work with the 
-`/dcim/devices/` endpoint where the filter return a hugh amount of entries.
+`/dcim/devices/` endpoint where the filter return a high amount of entries.
 To format the output for service discovery use the `X-Forwarded-For` header with the value `service-discovery`.
 > The reason for this implementation is that it has been observed that the netbox plugin 
 > [netbox-plugin-prometheus-sd](https://github.com/FlxPeters/netbox-plugin-prometheus-sd) 
-> will take a vary long time to return the result or even return 500 or 504 (probobly proxy timeout) 
-> when the number of devices is large.
+> will take a vary long time to return the result or even return 500 or 504 (probably proxy timeout) 
+> when the number of devices is high.
 > Only use this solution if you have a large number of devices in Netbox and the netbox-plugin-prometheus-sd is not 
 > working for you.
 > Using the web_proxy_cache for Netbox /dcim/devices/ the following labels are NOT available:
@@ -82,15 +83,19 @@ To format the output for service discovery use the `X-Forwarded-For` header with
 > - `__meta_netbox_tenant_group` - this attribute is not available in the `/dcim/devices/` endpoint
 > - `__meta_netbox_tenant_group_slug` - this attribute is not available in the `/dcim/devices/` endpoint
 > 
-> Example of using the service discovery with the web_proxy_cache for a tenant that has 24000 AP devices where the filter
+> Example of using the service discovery with the web_proxy_cache for a customer that has 24000 AP devices where the filter
 > make it return 14000 devices takes approximately 120 seconds the **first** time. Using the netbox-plugin-prometheus-sd 
-> it never returned the result. For smaller collections its been observed that the web_proxy_cache is approximately 10 
+> it never returned the result. For smaller collections it's been observed that the web_proxy_cache is approximately 10 
 > times faster.
 
 The following labels will be created for the service discovery using the /dcim/devices/ endpoint:
 - `__meta_netbox_device_type`
 - `__meta_netbox_device_type_slug`
+- `__meta_netbox_device_type_manufacturer`
+- `__meta_netbox_device_type_manufacturer_slug`
 - `__meta_netbox_id`
+- `__meta_netbox_location`
+- `__meta_netbox_location_slug`
 - `__meta_netbox_name`
 - `__meta_netbox_oob_ip`
 - `__meta_netbox_platform`

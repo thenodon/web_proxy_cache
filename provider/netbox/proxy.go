@@ -1,6 +1,7 @@
 package netbox
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,27 +19,31 @@ import (
 const (
 	Netbox = "netbox"
 	// Devices
-	DeviceType      = "device_type"
-	DeviceTypeSlug  = "device_type_slug"
-	ID              = "id"
-	Model           = "model"
-	Name            = "name"
-	OobIP           = "oob_ip"
-	Platform        = "platform"
-	PlatformSlug    = "platform_slug"
-	PrimaryIP       = "primary_ip"
-	PrimaryIP4      = "primary_ip4"
-	PrimaryIP6      = "primary_ip6"
-	Role            = "role"
-	RoleSlug        = "role_slug"
-	Serial          = "serial"
-	Site            = "site"
-	SiteSlug        = "site_slug"
-	Status          = "status"
-	Tenant          = "tenant"
-	TenantGroup     = "tenant_group"
-	TenantGroupSlug = "tenant_group_slug"
-	TenantSlug      = "tenant_slug"
+	DeviceType                 = "device_type"
+	DeviceTypeManufacturer     = "device_type_manufacturer"
+	DeviceTypeManufacturerSlug = "device_type_manufacturer_slug"
+	DeviceTypeSlug             = "device_type_slug"
+	ID                         = "id"
+	Model                      = "model"
+	Name                       = "name"
+	OobIP                      = "oob_ip"
+	Platform                   = "platform"
+	PlatformSlug               = "platform_slug"
+	PrimaryIP                  = "primary_ip"
+	PrimaryIP4                 = "primary_ip4"
+	PrimaryIP6                 = "primary_ip6"
+	Role                       = "role"
+	RoleSlug                   = "role_slug"
+	Serial                     = "serial"
+	Site                       = "site"
+	SiteSlug                   = "site_slug"
+	Status                     = "status"
+	Tenant                     = "tenant"
+	TenantGroup                = "tenant_group"
+	TenantGroupSlug            = "tenant_group_slug"
+	TenantSlug                 = "tenant_slug"
+	Location                   = "location"
+	LocationSlug               = "location_slug"
 )
 
 var Config = config.ConfigProxy{
@@ -48,7 +53,24 @@ var Config = config.ConfigProxy{
 	CacheGrace: config.GetEnvAsInt64("NETBOX_CACHE_GRACE", 300),
 	CacheSize:  config.GetEnvAsInt("NETBOX_CACHE_SIZE", 1000),
 }
-var customTransport = http.DefaultTransport
+var netboxHTTPSecure = config.GetEnvAsBool("NETBOX_HTTPS_SECURE", true)
+
+var customTransport = func() *http.Transport {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: !netboxHTTPSecure}}
+	}
+
+	transport := defaultTransport.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+
+	transport.TLSClientConfig.InsecureSkipVerify = !netboxHTTPSecure
+	return transport
+}()
 
 var cache map[string]*proxy_cache.Cache
 
@@ -179,8 +201,13 @@ func serviceDiscovery(cacheData interface{}) ([]map[string]interface{}, error) {
 		labelsMap[addMeta(ID)] = strconv.FormatFloat(device[ID].(float64), 'f', -1, 64)
 
 		if data, ok := device[DeviceType].(map[string]interface{}); ok {
-			labelsMap[addMeta(DeviceType)], _ = data["model"].(string)
+			labelsMap[addMeta(DeviceType)], _ = data[Model].(string)
 			labelsMap[addMeta(DeviceTypeSlug)], _ = data["slug"].(string)
+
+			if manufacturer, ok := data["manufacturer"].(map[string]interface{}); ok {
+				labelsMap[addMeta(DeviceTypeManufacturer)], _ = manufacturer[Name].(string)
+				labelsMap[addMeta(DeviceTypeManufacturerSlug)], _ = manufacturer["slug"].(string)
+			}
 		}
 
 		if data, ok := device[Site].(map[string]interface{}); ok {
@@ -197,6 +224,11 @@ func serviceDiscovery(cacheData interface{}) ([]map[string]interface{}, error) {
 		if data, ok := device[Platform].(map[string]interface{}); ok {
 			labelsMap[addMeta(Platform)], _ = data["name"].(string)
 			labelsMap[addMeta(PlatformSlug)], _ = data["slug"].(string)
+		}
+
+		if data, ok := device[Location].(map[string]interface{}); ok {
+			labelsMap[addMeta(Location)], _ = data["name"].(string)
+			labelsMap[addMeta(LocationSlug)], _ = data["slug"].(string)
 		}
 
 		if data, ok := device[Tenant].(map[string]interface{}); ok {
