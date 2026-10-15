@@ -285,10 +285,19 @@ func addMeta(key string) string {
 func flattenCustomFields(customFields map[string]interface{}) map[string]string {
 	flat := make(map[string]string)
 	for k, v := range customFields {
-		if v == nil {
+		switch value := v.(type) {
+		case nil:
 			flat[k] = ""
-		} else {
-			flat[k] = fmt.Sprintf("%v", v)
+		case string:
+			flat[k] = value
+		case map[string]interface{}:
+			if display, ok := value["display"]; ok && display != nil {
+				flat[k] = fmt.Sprintf("%v", display)
+			} else {
+				flat[k] = fmt.Sprintf("%v", value)
+			}
+		default:
+			flat[k] = fmt.Sprintf("%v", value)
 		}
 	}
 	return flat
